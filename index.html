@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>证书上链核验系统</title>
+
+<!-- 优先加载同目录的 ethers.js（离线可用）；加载失败时自动回退 CDN -->
+<script src="ethers.umd.min.js"></script>
+<script>
+if (typeof ethers === 'undefined') {
+  document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"><\/script>');
+}
+</script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: linear-gradient(160deg, #eef3f9 0%, #e6ecf5 60%, #edf0f7 100%);
+    min-height: 100vh; color: #1f2937; padding: 28px 16px 40px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  /* ── 头部 ─────────────────────────── */
+  .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  h1 { font-size: 26px; letter-spacing: 1px; color: #0f2a52; }
+  h1 .sub { display:block; font-size: 12px; font-weight: 400; color: #64748b; letter-spacing: 3px; margin-top: 4px; }
+  .pill {
+    font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px;
+    background: #fff; border: 1px solid #dbe3ee; color: #475569; box-shadow: 0 1px 3px rgba(15,42,82,.06);
+  }
+  .pill.ok   { border-color: #b7e4c0; background: #f0fdf4; color: #15803d; }
+  .pill.bad  { border-color: #f5c2c7; background: #fef2f2; color: #b91c1c; }
+  .pill.warn { border-color: #fcd34d; background: #fffbeb; color: #b45309; }
+
+  .alertbar {
+    display: none; margin: 14px 0 4px; padding: 12px 16px; border-radius: 10px;
+    font-size: 13.5px; line-height: 1.7;
+  }
+  .alertbar.show { display: block; }
+  .alertbar.red  { background: #fef2f2; border: 1px solid #f5c2c7; color: #991b1b; }
+  .alertbar.amber{ background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
+
+  /* ── 卡片 ─────────────────────────── */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; margin-top: 16px; }
+  .card {
+    background: #fff; border-radius: 14px; padding: 20px;
+    box-shadow: 0 2px 10px rgba(15,42,82,.07); border-top: 3px solid var(--ac, #2563eb);
+  }
+  .card h2 { font-size: 16.5px; color: #0f2a52; margin-bottom: 4px; }
+  .card .desc { font-size: 12.5px; color: #8a97a8; margin-bottom: 14px; }
+  .c-issue  { --ac: #2563eb; }
+  .c-verify { --ac: #16a34a; }
+  .c-revoke { --ac: #d97706; }
+  .c-ledger { --ac: #7c3aed; }
+
+  label.fl { font-size: 12.5px; color: #5b6b80; display: block; margin: 10px 0 5px; font-weight: 600; }
+  input[type="text"] {
+    width: 100%; padding: 10px 12px; border: 1px solid #d4dce8; border-radius: 8px;
+    font-size: 14px; outline: none; transition: border .15s, box-shadow .15s;
+  }
+  input[type="text"]:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+
+  .filebox { position: relative; }
+  .filebox input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .filebox .fake {
+    border: 1.5px dashed #c3cede; border-radius: 8px; padding: 11px 12px; font-size: 13px;
+    color: #8a97a8; text-align: center; cursor: pointer; transition: all .15s; background: #fafcfe;
+  }
+  .filebox .fake:hover { border-color: #2563eb; color: #2563eb; }
+  .filebox .fake.picked { border-style: solid; border-color: #16a34a; color: #15803d; background: #f0fdf4; }
+
+  button.act {
+    width: 100%; margin-top: 14px; padding: 11px; border: none; border-radius: 8px;
+    font-size: 14.5px; font-weight: 700; color: #fff; cursor: pointer; letter-spacing: 2px;
+    transition: filter .15s, transform .05s;
+  }
+  button.act:hover  { filter: brightness(1.08); }
+  button.act:active { transform: scale(.985); }
+  button.act:disabled { background: #cbd5e1 !important; cursor: not-allowed; }
+  .b-issue  { background: #2563eb; }
+  .b-verify { background: #16a34a; }
+  .b-revoke { background: #d97706; }
+
+  .line { margin-top: 12px; font-size: 13px; line-height: 1.65; display: none; padding: 10px 12px; border-radius: 8px; }
+  .line.show { display: block; }
+  .line.ok   { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .line.err  { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+  .line.info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+
+  /* 核验大横幅 */
+  .verdict {
+    display: none; margin-top: 14px; padding: 14px; border-radius: 10px;
+    font-size: 15.5px; font-weight: 700; line-height: 1.6; text-align: center;
+  }
+  .verdict.show { display: block; }
+  .verdict.pass { background: #f0fdf4; color: #15803d; border: 1.5px solid #86efac; }
+  .verdict.fail { background: #fef2f2; color: #b91c1c; border: 1.5px solid #fca5a5; }
+  .verdict .detail { display: block; font-size: 12px; font-weight: 400; margin-top: 6px; opacity: .85; }
+
+  /* 台账 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f6f8fb; color: #5b6b80; font-weight: 600; text-align: left; padding: 9px 10px; border-bottom: 1.5px solid #e5eaf2; white-space: nowrap; }
+  td { padding: 9px 10px; border-bottom: 1px solid #eef1f6; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, .mono { font-family: Consolas, Menlo, monospace; }
+  .empty { text-align: center; color: #94a3b8; padding: 22px 0 !important; font-size: 13px; }
+  .failrow { color: #b91c1c; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .badge.ok  { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+  .badge.bad { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+
+  /* 日志 */
+  .logcard { margin-top: 16px; background: #0f172a; border-radius: 14px; padding: 16px 18px; box-shadow: 0 2px 10px rgba(15,42,82,.18); }
+  .logcard h2 { color: #93c5fd; font-size: 14.5px; margin-bottom: 10px; }
+  #log { height: 170px; overflow-y: auto; font-family: Consolas, Menlo, monospace; font-size: 12.5px; line-height: 1.9; }
+  #log .t { color: #64748b; margin-right: 8px; }
+  #log div { border-bottom: 1px dashed rgba(148,163,184,.15); padding: 1px 2px; }
+  #log .ok   { color: #86efac; }
+  #log .err  { color: #fca5a5; }
+  #log .info { color: #93c5fd; }
+  #log .dim  { color: #cbd5e1; }
+
+  footer { margin-top: 22px; text-align: center; font-size: 12px; color: #94a3b8; line-height: 1.8; }
+  code.k { background: #eef2f8; border: 1px solid #dbe3ee; border-radius: 4px; padding: 1px 6px; font-family: Consolas, monospace; font-size: 11.5px; color: #475569; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <h1>🎓 证书上链核验系统<span class="sub">CERTIFICATE ON-CHAIN VERIFICATION</span></h1>
+    <div class="pill" id="statusPill">⏳ 正在连接区块链…</div>
+  </div>
+  <div class="alertbar" id="alertBar"></div>
+
+  <div class="grid">
+
+    <!-- ① 签发 -->
+    <div class="card c-issue">
+      <h2>① 签发证书</h2>
+      <div class="desc">将证书文件指纹（SHA-256）写入区块链</div>
+      <label class="fl">证书编号</label>
+      <input type="text" id="issueId" placeholder="如：CERT-2026-001">
+      <label class="fl">选择证书文件（PDF / 图片均可）</label>
+      <div class="filebox">
+        <input type="file" id="issueFile">
+        <div class="fake" id="issueFileFake">点击选择文件，或拖拽到此</div>
+      </div>
+      <button class="act b-issue" id="btnIssue" disabled>签发并写入区块链</button>
+      <div class="line" id="issueLine"></div>
+    </div>
+
+    <!-- ② 核验 -->
+    <div class="card c-verify">
+      <h2>② 核验真伪</h2>
+      <div class="desc">重新计算文件指纹，与链上记录比对，判断真伪 / 篡改 / 撤销</div>
+      <label class="fl">证书编号</label>
+      <input type="text" id="verifyId" placeholder="如：CERT-2026-001">
+      <label class="fl">选择待核验的文件</label>
+      <div class="filebox">
+        <input type="file" id="verifyFile">
+        <div class="fake" id="verifyFileFake">点击选择文件，或拖拽到此</div>
+      </div>
+      <button class="act b-verify" id="btnVerify" disabled>核验真伪</button>
+      <div class="verdict" id="verdict"></div>
+    </div>
+
+    <!-- ③ 撤销 -->
+    <div class="card c-revoke">
+      <h2>③ 撤销证书</h2>
+      <div class="desc">管理员宣布某编号证书作废（如证书遗失、冒领）</div>
+      <label class="fl">证书编号</label>
+      <input type="text" id="revokeId" placeholder="如：CERT-2026-001">
+      <button class="act b-revoke" id="btnRevoke" disabled>撤销该证书</button>
+      <div class="line" id="revokeLine"></div>
+    </div>
+
+    <!-- ④ 台账 -->
+    <div class="card c-ledger">
+      <h2>④ 链上证书台账</h2>
+      <div class="desc">实时读取链上全部签发与撤销记录</div>
+      <table>
+        <thead>
+          <tr><th>证书编号</th><th>状态</th><th>上链时间</th><th>颁发方</th></tr>
+        </thead>
+        <tbody id="ledgerBody">
+          <tr><td class="empty" colspan="4">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 操作日志 -->
+  <div class="logcard">
+    <h2>📜 操作日志</h2>
+    <div id="log"></div>
+  </div>
+
+  <footer>
+    证书文件仅在本机浏览器内计算 SHA-256 指纹，原文不上传；链上只保存哈希 ·
+    Ganache <code class="k">http://127.0.0.1:7545</code> · 合约 <code class="k">CertificateRegistry.sol</code> · 前端 <code class="k">ethers.js v6</code>
+  </footer>
+</div>
+
+<script>
+/* ═══════════════════════════ ★★★ 只需修改这三行 ★★★ ═══════════════════════════
+   1) RPC_URL          ：保持 http://127.0.0.1:7545（以 Ganache 界面显示的端口为准，
+                         若显示 8545 就改成 8545）
+   2) ADMIN_KEY        ：Ganache【第一个账户】的私钥（点账户右侧 🔑 钥匙图标复制）。
+                         下面预填的是 Ganache QUICKSTART 默认第一个账户的私钥，
+                         如果你自定义过助记词，请换成你自己的。
+   3) CONTRACT_ADDRESS ：Remix 部署成功后，Deployed Contracts 区 "AT" 后面的地址。
+                         下面预填的是"全新 QUICKSTART + 首次 Deploy"时的默认地址，
+                         部署后如页面提示合约不存在，请粘贴你 Remix 里显示的实际地址。
+═══════════════════════════════════════════════════════════════════════════════ */
+const RPC_URL          = "http://127.0.0.1:7545";
+const ADMIN_KEY        = "0x81d6979afa4805c94f30a7e27582cf08ed69dc2d79961f36834dcf75b41889df";
+const CONTRACT_ADDRESS = "0xB280667c950C391f7117f8ACb393aaa696A1337F";
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+const ABI = [
+  "function issue(string certId, bytes32 certHash)",
+  "function verify(string certId, bytes32 certHash) view returns (bool valid, string status)",
+  "function revoke(string certId)",
+  "function admin() view returns (address)",
+  "event CertIssued(string certId, bytes32 certHash, address issuer, uint256 issuedAt)",
+  "event CertRevoked(string certId, uint256 at)"
+];
+
+const $ = id => document.getElementById(id);
+let provider, readContract, walletContract, wallet;
+
+/* ── 工具函数 ─────────────────────────────────── */
+function log(msg, cls = 'dim') {
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const div = document.createElement('div');
+  div.innerHTML = `<span class="t">[${t}]</span><span class="${cls}"></span>`;
+  div.lastChild.textContent = msg;
+  $('log').prepend(div);
+}
+
+function showLine(el, type, text) {
+  el.className = 'line show ' + type;
+  el.textContent = text;
+}
+
+async function sha256Hex(file) {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return '0x' + Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function shortAddr(a) { return a ? (a.slice(0, 6) + '…' + a.slice(-4)) : '-'; }
+
+function fmtTime(sec) {
+  return new Date(Number(sec) * 1000).toLocaleString('zh-CN', { hour12: false });
+}
+
+/* 从 ethers v6 错误对象里提取链上 revert 原因 */
+function errText(e) {
+  const parts = [e?.reason, e?.info?.reason, e?.revert?.name, e?.shortMessage, e?.message]
+    .filter(Boolean).join(' | ');
+  return parts || '未知错误';
+}
+
+function friendly(e) {
+  const s = errText(e);
+  if (/already issued/i.test(s))            return '该编号已存在（already issued）—— 防重复保护生效，请更换新编号';
+  if (/not admin/i.test(s))                 return '当前账户不是合约管理员（not admin）—— 请使用 Ganache 第一个账户的私钥';
+  if (/could not detect network/i.test(s))  return '无法连接区块链节点 —— 请确认 Ganache 已开启，RPC_URL 端口与 Ganache 界面显示一致';
+  if (/missing revert data|CALL_EXCEPTION/i.test(s))
+                                            return '合约执行被拒绝 —— 常见原因：① 编号已被签发过；② 用的私钥不是管理员；③ CONTRACT_ADDRESS 填错。可先看操作日志或台账排查';
+  if (/invalid opcode/i.test(s))            return '虚拟机不识别合约指令（invalid opcode）—— 多为 Remix 编译器版本过新，请按手册改选 0.8.20 重新编译部署';
+  if (/invalid private key|invalid Bytes/i.test(s)) return 'ADMIN_KEY 私钥格式不正确 —— 请重新从 Ganache 第一个账户复制（0x 开头的 66 位字符串）';
+  if (/nonce|replacement/i.test(s))         return '交易冲突，请稍后重试';
+  return s.slice(0, 220);
+}
+
+/* ── 文件选择框美化 ───────────────────────────── */
+function bindFile(inputId, fakeId) {
+  $(inputId).addEventListener('change', e => {
+    const f = e.target.files[0];
+    const fake = $(fakeId);
+    if (f) { fake.textContent = '📄 ' + f.name + '（' + (f.size / 1024).toFixed(1) + ' KB）'; fake.classList.add('picked'); }
+    else   { fake.textContent = '点击选择文件，或拖拽到此'; fake.classList.remove('picked'); }
+  });
+}
+bindFile('issueFile', 'issueFileFake');
+bindFile('verifyFile', 'verifyFileFake');
+
+/* ── 台账 ─────────────────────────────────────── */
+let refreshTimer = null;
+function refreshLedger() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(_refreshLedger, 250);
+}
+
+async function _refreshLedger() {
+  const body = $('ledgerBody');
+  try {
+    const issued = await readContract.queryFilter(readContract.filters.CertIssued(), 0, 'latest');
+    if (!issued.length) {
+      body.innerHTML = '<tr><td class="empty" colspan="4">暂无记录</td></tr>';
+      return;
+    }
+    const revokedMap = {};
+    try {
+      const revs = await readContract.queryFilter(readContract.filters.CertRevoked(), 0, 'latest');
+      for (const r of revs) revokedMap[r.args.certId] = true;
+    } catch (_) {}
+
+    body.innerHTML = '';
+    for (const ev of issued.reverse()) {
+      const id = ev.args.certId, hash = ev.args.certHash;
+      const isRevoked = !!revokedMap[id];
+      if (!isRevoked) {
+        try { const [, st] = await readContract.verify(id, hash); if (st === 'REVOKED') revokedMap[id] = isRevoked = true; } catch (_) {}
+      }
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td class="mono"></td>
+         <td><span class="badge ${isRevoked ? 'bad' : 'ok'}">${isRevoked ? '已撤销' : '真实有效'}</span></td>
+         <td>${fmtTime(ev.args.issuedAt)}</td>
+         <td class="mono">${shortAddr(ev.args.issuer)}</td>`;
+      tr.firstChild.textContent = id;
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    const msg = errText(e);
+    const hint = /detect network/i.test(msg)
+      ? 'RPC_URL 端口不对 → 改成 Ganache 界面显示的端口'
+      : /missing revert|CALL_EXCEPTION/i.test(msg)
+        ? 'CONTRACT_ADDRESS 填错 → 粘贴 Remix "Deployed Contracts" 的地址'
+        : '请确认 Ganache 正在运行';
+    body.innerHTML = `<tr><td class="empty failrow" colspan="4">查询失败：${msg.slice(0, 80)}<br>${hint}</td></tr>`;
+  }
+}
+
+/* ── ① 签发 ───────────────────────────────────── */
+$('btnIssue').addEventListener('click', async () => {
+  const line = $('issueLine');
+  const certId = $('issueId').value.trim();
+  const file = $('issueFile').files[0];
+  if (!certId) return showLine(line, 'err', '请先填写证书编号，例如 CERT-2026-001');
+  if (!file)   return showLine(line, 'err', '请先选择要上链的证书文件');
+  $('btnIssue').disabled = true;
+  try {
+    const hash = await sha256Hex(file);
+    log(`计算 SHA-256 完成（${certId}）：${hash.slice(0, 18)}…`, 'info');
+
+    /* 预检：模拟执行一次，提前拿到真实失败原因（编号重复 / 非管理员），再正式发交易 */
+    try {
+      await walletContract.issue.staticCall(certId, hash);
+    } catch (pre) {
+      const ps = errText(pre);
+      if (/already issued/i.test(ps))
+        throw new Error('该编号已被签发（already issued）—— 防重复保护生效，请更换新编号');
+      if (/not admin/i.test(ps))
+        throw new Error('当前账户不是合约管理员（not admin）—— 请使用 Ganache 第一个账户的私钥');
+    }
+
+    showLine(line, 'info', '⏳ 正在写入区块链，请稍候…');
+    const tx = await walletContract.issue(certId, hash);
+    log(`交易已广播：${tx.hash.slice(0, 22)}…`, 'info');
+    const receipt = await tx.wait();
+    log(`✅ 上链成功！区块高度： ${receipt.blockNumber}，Gas消耗： ${receipt.gasUsed}`, 'ok');
+    showLine(line, 'ok', `✅ 上链成功！区块高度： ${receipt.blockNumber}，Gas消耗： ${receipt.gasUsed}`);
+    refreshLedger();
+  } catch (e) {
+    const msg = friendly(e);
+    log('❌ 签发失败：' + msg, 'err');
+    showLine(line, 'err', '❌ ' + msg);
+  }
+  $('btnIssue').disabled = false;
+});
+
+/* ── ② 核验 ───────────────────────────────────── */
+$('btnVerify').addEventListener('click', async () => {
+  const v = $('verdict');
+  const certId = $('verifyId').value.trim();
+  const file = $('verifyFile').files[0];
+  v.className = 'verdict';
+  if (!certId) { v.className = 'verdict show fail'; v.innerHTML = '请先填写证书编号'; return; }
+  if (!file)   { v.className = 'verdict show fail'; v.innerHTML = '请先选择待核验的文件'; return; }
+  $('btnVerify').disabled = true;
+  try {
+    const hash = await sha256Hex(file);
+    log(`正在核验 ${certId}，文件指纹：${hash.slice(0, 18)}…`, 'info');
+    const [valid, status] = await readContract.verify(certId, hash);
+    if (valid) {
+      v.className = 'verdict show pass';
+      v.innerHTML = `✅ 核验通过 —— 证书【真实有效】<span class="detail">编号 ${certId} 存在且文件指纹与链上一致</span>`;
+      log(`✅ 核验通过：${certId} 为真实有效证书`, 'ok');
+    } else if (status === 'HASH_MISMATCH') {
+      v.className = 'verdict show fail';
+      v.innerHTML = `❌ 核验失败 —— 内容被篡改<span class="detail">状态码：HASH_MISMATCH · 文件指纹与链上记录不一致</span>`;
+      log(`❌ 核验失败：${certId} 文件指纹与链上不一致（HASH_MISMATCH）`, 'err');
+    } else if (status === 'REVOKED') {
+      v.className = 'verdict show fail';
+      v.innerHTML = `❌ 核验失败 —— 已被颁发方撤销<span class="detail">状态码：REVOKED · 该证书已作废</span>`;
+      log(`❌ 核验失败：${certId} 已被撤销（REVOKED）`, 'err');
+    } else {
+      v.className = 'verdict show fail';
+      v.innerHTML = `❌ 核验失败 —— 链上不存在此证书<span class="detail">状态码：NOT_FOUND · 请检查编号是否输入正确</span>`;
+      log(`❌ 核验失败：${certId} 不存在（NOT_FOUND）`, 'err');
+    }
+  } catch (e) {
+    const msg = friendly(e);
+    v.className = 'verdict show fail';
+    v.innerHTML = '❌ 核验出错：' + msg;
+    log('❌ 核验出错：' + msg, 'err');
+  }
+  $('btnVerify').disabled = false;
+});
+
+/* ── ③ 撤销 ───────────────────────────────────── */
+$('btnRevoke').addEventListener('click', async () => {
+  const line = $('revokeLine');
+  const certId = $('revokeId').value.trim();
+  if (!certId) return showLine(line, 'err', '请先填写要撤销的证书编号');
+  $('btnRevoke').disabled = true;
+  try {
+    /* 预检：模拟执行一次，提前拿到真实失败原因（编号不存在 / 非管理员） */
+    try {
+      await walletContract.revoke.staticCall(certId);
+    } catch (pre) {
+      const ps = errText(pre);
+      if (/not found/i.test(ps))
+        throw new Error('链上不存在此编号（not found）—— 请核对台账中已有的证书编号');
+      if (/not admin/i.test(ps))
+        throw new Error('当前账户不是合约管理员（not admin）—— 请使用 Ganache 第一个账户的私钥');
+    }
+
+    showLine(line, 'info', '⏳ 正在发送撤销交易…');
+    const tx = await walletContract.revoke(certId);
+    const receipt = await tx.wait();
+    log(`✅ 证书 ${certId} 已撤销（区块 ${receipt.blockNumber}）`, 'ok');
+    showLine(line, 'ok', `✅ 证书 ${certId} 已撤销，台账状态已更新为红色"已撤销"`);
+    refreshLedger();
+  } catch (e) {
+    const msg = friendly(e);
+    log('❌ 撤销失败：' + msg, 'err');
+    showLine(line, 'err', '❌ ' + msg);
+  }
+  $('btnRevoke').disabled = false;
+});
+
+/* ── 初始化 ───────────────────────────────────── */
+function alert(type, html) {
+  const bar = $('alertBar');
+  bar.className = 'alertbar show ' + type;
+  bar.innerHTML = html;
+}
+function setPill(type, text) {
+  const p = $('statusPill');
+  p.className = 'pill ' + type;
+  p.textContent = text;
+}
+function disableAll() {
+  ['btnIssue', 'btnVerify', 'btnRevoke'].forEach(id => $(id).disabled = true);
+}
+
+(async function init() {
+  log('系统启动，正在初始化…', 'dim');
+  if (typeof ethers === 'undefined') {
+    setPill('bad', '🔴 ethers.js 未加载');
+    alert('red', '❌ ethers.js 加载失败：请检查网络，或确认 <b>ethers.umd.min.js</b> 与 index.html 在同一目录（离线环境必须保留该文件）。');
+    disableAll(); return;
+  }
+  log('ethers.js v' + (ethers.version || '6') + ' 加载成功', 'info');
+
+  if (!window.crypto || !crypto.subtle) {
+    setPill('bad', '🔴 浏览器限制加密功能');
+    alert('red', '❌ 当前方式打开无法使用 SHA-256（crypto.subtle 被浏览器限制）。<br>👉 请在项目文件夹地址栏输入 <b>cmd</b> 回车，执行 <b>python -m http.server 8000</b>，再用浏览器打开 <b>http://localhost:8000/index.html</b>');
+    disableAll(); return;
+  }
+
+  try {
+    provider = new ethers.JsonRpcProvider(RPC_URL, undefined, { batchMaxCount: 1 });
+    const bn = await provider.getBlockNumber();
+    log(`已连接 Ganache（${RPC_URL}），当前区块高度：${bn}`, 'ok');
+  } catch (e) {
+    setPill('bad', '🔴 连接失败');
+    alert('red', '❌ 无法连接 Ganache（' + RPC_URL + '）<br>👉 请先打开 Ganache 并点击 QUICKSTART；若界面显示端口不是 7545，请把代码第 1 行 <b>RPC_URL</b> 改成对应端口。');
+    disableAll(); return;
+  }
+
+  try {
+    readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+    const code = await provider.getCode(CONTRACT_ADDRESS);
+    if (code === '0x') {
+      setPill('bad', '🔴 合约不存在');
+      alert('red', '❌ 地址 <b>' + CONTRACT_ADDRESS + '</b> 上没有合约代码。<br>👉 请完成手册阶段 3 的部署，并把 Remix 左下角 <b>Deployed Contracts</b> 区 "AT" 后面的地址粘贴到 index.html 的 <b>CONTRACT_ADDRESS</b>（注意别复制成交易哈希）。');
+      disableAll(); return;
+    }
+    const adminAddr = await readContract.admin();
+    log('合约连接成功，管理员：' + adminAddr, 'ok');
+
+    wallet = new ethers.Wallet(ADMIN_KEY, provider);
+    walletContract = readContract.connect(wallet);
+    if (wallet.address.toLowerCase() !== adminAddr.toLowerCase()) {
+      setPill('warn', '🟡 已连接（私钥非管理员）');
+      alert('amber', '⚠️ 当前私钥不是合约管理员，签发/撤销会报 <b>not admin</b>。<br>👉 请把 Ganache <b>第一个账户</b>（列表最上方）的私钥粘贴到 ADMIN_KEY。核验功能不受影响。');
+    } else {
+      setPill('ok', '🟢 区块链已连接 · 合约就绪');
+      log('管理员身份校验通过：' + shortAddr(wallet.address), 'ok');
+      ['btnIssue', 'btnVerify', 'btnRevoke'].forEach(id => $(id).disabled = false);
+    }
+
+    readContract.on('CertIssued', () => refreshLedger());
+    readContract.on('CertRevoked', () => refreshLedger());
+    refreshLedger();
+  } catch (e) {
+    setPill('bad', '🔴 初始化失败');
+    alert('red', '❌ 初始化失败：' + friendly(e) + '<br>👉 请检查 CONTRACT_ADDRESS / ADMIN_KEY 三行配置是否正确。');
+    disableAll();
+  }
+})();
+</script>
+</body>
+</html>
